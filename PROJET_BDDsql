@@ -1,0 +1,278 @@
+-- CREATE TABLE PRODUCTS ----------
+CREATE TABLE products (
+    product_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_name VARCHAR2(100),
+    product_price NUMBER(10, 2),
+    stock_quantity NUMBER,
+    stock_critical NUMBER
+);
+
+-- CREATE TABLE ORDERS ----------
+CREATE TABLE orders(
+    order_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_id NUMBER,
+    client_id NUMBER,
+    order_date DATE,
+    quantity NUMBER,
+    FOREIGN KEY (product_id) REFERENCES products(product_id)
+);
+
+-- CREATE TABLE STOCKS_MOVEMENTS ----------
+CREATE TABLE stock_movements (
+    movement_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_id NUMBER,
+    movement_type VARCHAR2(20) CHECK (movement_type IN ('IN', 'OUT')),
+    movement_date DATE,
+    quantity NUMBER,
+    FOREIGN KEY (product_id) REFERENCES products(product_id)
+);
+
+
+-- INSER INTO IN TABLE PRODUCTS -------- 
+DECLARE
+    i NUMBER := 0;
+BEGIN
+    WHILE i < 9000000 LOOP
+        INSERT /*+ APPEND */ INTO products (product_name, product_price, stock_quantity, stock_critical)
+        SELECT
+            'Product_' || (LEVEL + i),
+            ROUND(DBMS_RANDOM.VALUE(10, 1000), 2),
+            TRUNC(DBMS_RANDOM.VALUE(0, 500)),
+            TRUNC(DBMS_RANDOM.VALUE(1, 20))
+        FROM dual
+        CONNECT BY level <= 50000;
+
+        COMMIT;
+        i := i + 50000;
+    END LOOP;
+END;
+/
+SELECT COUNT(*) FROM PRODUCTS;
+
+
+-- INSER INTO IN TABLE ORDERS ----------
+DECLARE
+    i NUMBER :=0;
+BEGIN
+    WHILE i<10000000 LOOP
+        INSERT INTO orders (product_id,client_id,order_date,quantity)
+        SELECT
+        TRUNC(DBMS_RANDOM.VALUE(1, 8333333)),
+        TRUNC(DBMS_RANDOM.VALUE(1,9000000 )),
+        -- Génère une date aléatoire entre deux dates spécifiques (ex: 2020-01-01 et 2025-01-01).
+        TO_DATE('2020-01-01', 'YYYY-MM-DD') + TRUNC(DBMS_RANDOM.VALUE(0, 1826)),  -- Date aléatoire entre 2020 et 2025.
+        TRUNC(DBMS_RANDOM.VALUE(1, 100))    
+        FROM dual CONNECT BY level <= 50000;
+        COMMIT;
+        i := i + 50000;
+    END LOOP;
+END;
+/
+
+-- INSER INTO IN TABLE STOCKS_MOVEMENTS ----------
+DECLARE
+    i NUMBER := 0;
+    v_type VARCHAR2(3);
+BEGIN
+    WHILE i < 9000000 LOOP
+        INSERT INTO stock_movements (product_id, movement_type, movement_date, quantity)
+        SELECT
+            TRUNC(DBMS_RANDOM.VALUE(1, 9000000)),
+            CASE 
+                WHEN DBMS_RANDOM.VALUE < 0.5 THEN 'IN' 
+                ELSE 'OUT' 
+            END,
+            TO_DATE('2020-01-01', 'YYYY-MM-DD') + TRUNC(DBMS_RANDOM.VALUE(0, 1826)), 
+            TRUNC(DBMS_RANDOM.VALUE(1, 1000))
+        FROM dual
+        CONNECT BY level <= 50000;
+
+        COMMIT;
+        i := i + 50000;
+    END LOOP;
+END;
+/
+
+-- REQUETE -------------
+/*Extract the total quantity of movements (IN, OUT) for each product by calculating:
+current stock = sum of inputs (IN) - sum of outputs (OUT) per product.
+the product name.
+the total number of orders associated with this product (from the orders table).
+Sort results by current stock in descending order, and only display products with more than 100 orders. */
+
+SET TIMING ON
+SELECT P.product_id AS ID_PRODUIT,
+P.product_name AS NAME_PRODUIT,
+SUM(CASE WHEN SM.movement_type = 'IN' THEN SM.quantity ELSE 0 END) AS TOTAL_IN,
+SUM(CASE WHEN SM.movement_type = 'OUT' THEN SM.quantity ELSE 0 END) AS TOTAL_OUT,
+(SUM(CASE WHEN SM.movement_type='IN' THEN SM.quantity ELSE 0 END) 
+- SUM(CASE WHEN SM.movement_type='OUT' THEN SM.quantity ELSE 0 END) ) AS STOCK_ACTUEL,
+SUM(SM.quantity) AS QUENTITE_TOTAL,
+COUNT(O.order_id) AS TOTAL_COMMANDES
+FROM 
+    PRODUCTS P
+JOIN stock_movements SM ON P.product_id = SM.product_id
+JOIN ORDERS O ON P.product_id = O.product_id 
+GROUP BY P.product_id,P.product_name
+ORDER BY STOCK_ACTUEL DESC;
+
+----- SIMPLE VIEW -------------
+CREATE VIEW S_VIEW AS 
+SELECT P.product_id AS ID_PRODUIT,
+P.product_name AS NAME_PRODUIT,
+SUM(CASE WHEN SM.movement_type = 'IN' THEN SM.quantity ELSE 0 END) AS TOTAL_IN,
+SUM(CASE WHEN SM.movement_type = 'OUT' THEN SM.quantity ELSE 0 END) AS TOTAL_OUT,
+(SUM(CASE WHEN SM.movement_type='IN' THEN SM.quantity ELSE 0 END) 
+- SUM(CASE WHEN SM.movement_type='OUT' THEN SM.quantity ELSE 0 END) ) AS STOCK_ACTUEL,
+SUM(SM.quantity) AS QUENTITE_TOTAL,
+COUNT(O.order_id) AS TOTAL_COMMANDES
+FROM 
+    PRODUCTS P
+JOIN stock_movements SM ON P.product_id = SM.product_id
+JOIN ORDERS O ON P.product_id = O.product_id 
+GROUP BY P.product_id,P.product_name
+ORDER BY STOCK_ACTUEL DESC;
+
+SET TIMING ON
+SELECT * FROM S_VIEW;
+
+----- MATERIALIZED  VIEW WITH BUILD IMMEDIATE -------------
+CREATE MATERIALIZED VIEW MBI_VIEW 
+BUILD IMMEDIATE
+AS
+SELECT P.product_id AS ID_PRODUIT,
+P.product_name AS NAME_PRODUIT,
+SUM(CASE WHEN SM.movement_type = 'IN' THEN SM.quantity ELSE 0 END) AS TOTAL_IN,
+SUM(CASE WHEN SM.movement_type = 'OUT' THEN SM.quantity ELSE 0 END) AS TOTAL_OUT,
+(SUM(CASE WHEN SM.movement_type='IN' THEN SM.quantity ELSE 0 END) 
+- SUM(CASE WHEN SM.movement_type='OUT' THEN SM.quantity ELSE 0 END) ) AS STOCK_ACTUEL,
+SUM(SM.quantity) AS QUENTITE_TOTAL,
+COUNT(O.order_id) AS TOTAL_COMMANDES
+FROM 
+    PRODUCTS P
+JOIN stock_movements SM ON P.product_id = SM.product_id
+JOIN ORDERS O ON P.product_id = O.product_id 
+GROUP BY P.product_id,P.product_name
+ORDER BY STOCK_ACTUEL DESC;
+
+--- REFRESH  
+EXEC DBMS_MVIEW.REFRESH('MBI_VIEW');
+
+SET TIMING ON
+SELECT * FROM MBI_VIEW; 
+
+
+----- MATERIALIZED  VIEW WITH BUILD DEFERRED -------------
+CREATE MATERIALIZED VIEW MBD_VIEW100 
+BUILD DEFERRED
+AS
+SELECT P.product_id AS ID_PRODUIT,
+P.product_name AS NAME_PRODUIT,
+SUM(CASE WHEN SM.movement_type = 'IN' THEN SM.quantity ELSE 0 END) AS TOTAL_IN,
+SUM(CASE WHEN SM.movement_type = 'OUT' THEN SM.quantity ELSE 0 END) AS TOTAL_OUT,
+(SUM(CASE WHEN SM.movement_type='IN' THEN SM.quantity ELSE 0 END) 
+- SUM(CASE WHEN SM.movement_type='OUT' THEN SM.quantity ELSE 0 END) ) AS STOCK_ACTUEL,
+SUM(SM.quantity) AS QUENTITE_TOTAL,
+COUNT(O.order_id) AS TOTAL_COMMANDES
+FROM 
+    PRODUCTS P
+JOIN stock_movements SM ON P.product_id = SM.product_id
+JOIN ORDERS O ON P.product_id = O.product_id 
+GROUP BY P.product_id,P.product_name
+ORDER BY STOCK_ACTUEL DESC;
+
+-------REFRESH 
+EXEC DBMS_MVIEW.REFRESH('MBD_VIEW1');
+
+SET TIMING ON
+SELECT * FROM MBD_VIEW100; 
+
+----- EXPLAIN REQUETE SIMPLE -----
+
+EXPLAIN  PLAN 
+SET STATEMENT_ID='RQT'
+FOR
+
+SELECT P.product_id AS ID_PRODUIT,
+P.product_name AS NAME_PRODUIT,
+SUM(CASE WHEN SM.movement_type = 'IN' THEN SM.quantity ELSE 0 END) AS TOTAL_IN,
+SUM(CASE WHEN SM.movement_type = 'OUT' THEN SM.quantity ELSE 0 END) AS TOTAL_OUT,
+(SUM(CASE WHEN SM.movement_type='IN' THEN SM.quantity ELSE 0 END) 
+- SUM(CASE WHEN SM.movement_type='OUT' THEN SM.quantity ELSE 0 END) ) AS STOCK_ACTUEL,
+SUM(SM.quantity) AS QUENTITE_TOTAL,
+COUNT(O.order_id) AS TOTAL_COMMANDES
+FROM 
+    PRODUCTS P
+JOIN stock_movements SM ON P.product_id = SM.product_id
+JOIN ORDERS O ON P.product_id = O.product_id 
+GROUP BY P.product_id,P.product_name
+ORDER BY STOCK_ACTUEL DESC;
+
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL ,'RQT','TYPICAL'));
+----- EXPLAIN VIEW SIMPLE -----
+
+EXPLAIN  PLAN 
+SET STATEMENT_ID='ES_VIEW'
+FOR
+SELECT * FROM S_VIEW;
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL ,'ES_VIEW','TYPICAL'));
+
+----- EXPLAIN EMBI_VIEW -----
+
+EXPLAIN  PLAN 
+SET STATEMENT_ID='EMBI_VIEW'
+FOR
+SELECT * FROM MBI_VIEW;
+
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL ,'EMBI_VIEW','TYPICAL'));
+
+----- EXPLAIN  EMBD_VIEW-----
+
+EXPLAIN  PLAN 
+SET STATEMENT_ID='EMBD_VIEW'
+FOR
+SELECT * FROM MBD_VIEW; 
+
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL ,'EMBD_VIEW','TYPICAL'));
+
+
+----- TIME REQUETE SIMPLE -----
+
+SET TIMING ON
+SELECT P.product_id AS ID_PRODUIT,
+P.product_name AS NAME_PRODUIT,
+SUM(CASE WHEN SM.movement_type = 'IN' THEN SM.quantity ELSE 0 END) AS TOTAL_IN,
+SUM(CASE WHEN SM.movement_type = 'OUT' THEN SM.quantity ELSE 0 END) AS TOTAL_OUT,
+(SUM(CASE WHEN SM.movement_type='IN' THEN SM.quantity ELSE 0 END) 
+- SUM(CASE WHEN SM.movement_type='OUT' THEN SM.quantity ELSE 0 END) ) AS STOCK_ACTUEL,
+SUM(SM.quantity) AS QUENTITE_TOTAL,
+COUNT(O.order_id) AS TOTAL_COMMANDES
+FROM 
+    PRODUCTS P
+JOIN stock_movements SM ON P.product_id = SM.product_id
+JOIN ORDERS O ON P.product_id = O.product_id 
+GROUP BY P.product_id,P.product_name
+ORDER BY STOCK_ACTUEL DESC;
+
+----- EXPLAIN VIEW SIMPLE -----
+
+SET TIMING ON
+SELECT * FROM S_VIEW;
+
+----- EXPLAIN EMBI_VIEW -----
+
+SET TIMING ON
+SELECT * FROM MBI_VIEW;
+
+----- EXPLAIN  EMBD_VIEW-----
+
+SET TIMING ON
+SELECT * FROM MBD_VIEW; 
+
+
+
+-----------------
+
+SELECT COUNT(*) FROM PRODUCTS;
+SELECT COUNT(*) FROM ORDERS;
+SELECT COUNT(*) FROM stock_movements;
